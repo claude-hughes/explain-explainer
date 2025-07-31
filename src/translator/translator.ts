@@ -30,7 +30,7 @@ export class PostgreSQLTranslator {
 
       const explanation = getNodeExplanation(currentNode);
       const performanceIssues = detectPerformanceIssues(currentNode);
-      const recommendations = generateRecommendations(currentNode);
+      // const recommendations = generateRecommendations(currentNode);
 
       steps.push({
         stepNumber: stepCounter++,
@@ -174,11 +174,11 @@ export class PostgreSQLTranslator {
     return str.charAt(0).toUpperCase() + str.slice(1);
   }
 
-  private formatNumber(num: number): string {
-    if (num < 1000) return num.toString();
-    if (num < 1000000) return `${(num / 1000).toFixed(1)}K`;
-    return `${(num / 1000000).toFixed(1)}M`;
-  }
+  // private formatNumber(num: number): string {
+  //   if (num < 1000) return num.toString();
+  //   if (num < 1000000) return `${(num / 1000).toFixed(1)}K`;
+  //   return `${(num / 1000000).toFixed(1)}M`;
+  // }
 }
 
 export function translatePostgreSQLPlan(rootNode: ParsedNode): TranslationResult {
