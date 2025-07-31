@@ -34,7 +34,17 @@ npm run preview
 
 ## Deployment
 
-This project is deployed to GitHub Pages. Any push to the main branch will automatically deploy.
+To deploy to GitHub Pages manually:
+
+1. Build the project: `npm run build`
+2. Deploy the dist folder to GitHub Pages
+
+You'll need to:
+1. Go to Settings > Pages in your GitHub repository
+2. Set Source to "Deploy from a branch"
+3. Choose the branch where you'll push the built files
+
+Alternatively, create a GitHub Actions workflow with the `workflow` permission to automate deployment.
 
 ## License
 
