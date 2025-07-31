@@ -44,7 +44,7 @@ const NODE_DESCRIPTIONS: Record<string, (node: ParsedNode) => NodeExplanation> =
   }),
 
   'Index Scan': (node) => ({
-    description: `look up rows using the ${node.indexName} index${node.indexCond ? ' where ' + formatCondition(node.indexCond) : ''}${node.filter ? ', then filter for rows where ' + formatFilter(node.filter) : ''}`,
+    description: `look up rows in the ${node.tableName || 'table'} table using the ${node.indexName || 'index'} index${node.indexCond ? ' where ' + formatCondition(node.indexCond) : ''}${node.filter ? ', then filter for rows where ' + formatFilter(node.filter) : ''}`,
     performanceNotes: [
       `Expected to find ${formatNumber(node.rows)} row${node.rows === 1 ? '' : 's'}`,
       node.actualRows ? `Actually found ${formatNumber(node.actualRows)} row${node.actualRows === 1 ? '' : 's'}` : undefined
@@ -199,14 +199,26 @@ const NODE_DESCRIPTIONS: Record<string, (node: ParsedNode) => NodeExplanation> =
 };
 
 export function getNodeExplanation(node: ParsedNode): NodeExplanation {
-  const explainer = NODE_DESCRIPTIONS[node.nodeType] || NODE_DESCRIPTIONS[node.operation || ''];
+  // Try to find explainer by operation first, then by nodeType
+  let explainer = NODE_DESCRIPTIONS[node.operation || ''];
+  
+  if (!explainer) {
+    // Try to match by the start of nodeType (e.g., "Index Scan using..." matches "Index Scan")
+    const nodeTypeKey = Object.keys(NODE_DESCRIPTIONS).find(key => 
+      node.nodeType.startsWith(key)
+    );
+    if (nodeTypeKey) {
+      explainer = NODE_DESCRIPTIONS[nodeTypeKey];
+    }
+  }
   
   if (explainer) {
     return explainer(node);
   }
 
+  // Default explanation with more details
   return {
-    description: `perform a ${node.nodeType || node.operation} operation${node.tableName ? ` on ${node.tableName}` : ''}`,
+    description: `perform a ${node.operation || node.nodeType} operation${node.tableName ? ` on table ${node.tableName}` : ''}${node.indexName ? ` using index ${node.indexName}` : ''}`,
     performanceNotes: node.rows ? [`Expected to process ${formatNumber(node.rows)} row${node.rows === 1 ? '' : 's'}`] : [],
     warnings: [],
     recommendations: []

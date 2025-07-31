@@ -54,109 +54,96 @@ export class PostgreSQLTranslator {
   private generateDetailedSummary(rootNode: ParsedNode, steps: ExecutionStep[]): string {
     if (steps.length === 0) return "No execution steps found.";
 
-    // Analyze the query structure
+    const parts: string[] = [];
+    
+    // Analyze the query structure from bottom to top
     const scanSteps = steps.filter(s => s.nodeType.includes('Scan'));
     const joinSteps = steps.filter(s => s.nodeType.includes('Loop') || s.nodeType.includes('Join'));
     const sortSteps = steps.filter(s => s.nodeType.includes('Sort'));
     const limitSteps = steps.filter(s => s.nodeType.includes('Limit'));
     const gatherSteps = steps.filter(s => s.nodeType.includes('Gather'));
     
-    let summary = "This query ";
-
-    // Describe the main data access pattern
+    // Describe the data access pattern
+    parts.push("This query executes as follows:");
+    
+    // 1. Initial table access
     if (scanSteps.length > 0) {
-      const mainScan = scanSteps[0];
-      if (mainScan.nodeType.includes('Parallel')) {
-        summary += `performs a parallel scan`;
-      } else if (mainScan.nodeType.includes('Index')) {
-        summary += `uses index lookups`;
-      } else {
-        summary += `performs table scans`;
-      }
+      const parallelScans = scanSteps.filter(s => s.nodeType.includes('Parallel'));
+      const indexScans = scanSteps.filter(s => s.nodeType.includes('Index'));
+      const seqScans = scanSteps.filter(s => s.nodeType.includes('Seq') && !s.nodeType.includes('Parallel'));
       
-      // List tables being accessed
-      const tables = [...new Set(scanSteps.map(s => s.tableName).filter(Boolean))];
-      if (tables.length > 0) {
-        summary += ` on ${tables.join(', ')}`;
+      if (parallelScans.length > 0) {
+        const scan = parallelScans[0];
+        parts.push(`1. Starts with a parallel sequential scan of the ${scan.tableName} table (expecting ${formatNumber(scan.estimatedRows)} rows)`);
+      } else if (indexScans.length > 0) {
+        const scan = indexScans[indexScans.length - 1]; // Get the first in execution order
+        parts.push(`1. Begins by looking up rows in the ${scan.tableName} table using the ${scan.indexName} index`);
+      } else if (seqScans.length > 0) {
+        const scan = seqScans[0];
+        parts.push(`1. Performs a sequential scan of the ${scan.tableName} table`);
       }
     }
 
-    // Describe joins
+    // 2. Joins
     if (joinSteps.length > 0) {
-      summary += `, performs ${joinSteps.length} join operation${joinSteps.length > 1 ? 's' : ''}`;
-      const nestedLoops = joinSteps.filter(s => s.nodeType.includes('Nested Loop')).length;
-      if (nestedLoops > 0) {
-        summary += ` (using nested loops)`;
-      }
+      const tables = [...new Set(scanSteps.slice(0, joinSteps.length + 1).map(s => s.tableName).filter(Boolean))];
+      parts.push(`2. Joins data from ${tables.join(', ')} using ${joinSteps.length} nested loop operation${joinSteps.length > 1 ? 's' : ''}`);
     }
 
-    // Describe post-processing
+    // 3. Additional processing
     if (sortSteps.length > 0) {
-      summary += `, sorts the results`;
+      parts.push(`3. Sorts the combined results`);
     }
 
-    if (limitSteps.length > 0) {
-      summary += `, and returns only ${limitSteps[0].estimatedRows} rows`;
-    }
-
-    summary += ".";
-
-    // Add execution strategy details
+    // 4. Parallel gathering
     if (gatherSteps.length > 0) {
-      summary += " The query uses parallel execution to improve performance.";
+      parts.push(`4. Gathers and merges results from parallel workers`);
     }
 
-    // Add cost analysis
+    // 5. Final limiting
+    if (limitSteps.length > 0) {
+      parts.push(`5. Limits the final output to ${limitSteps[0].estimatedRows} rows`);
+    }
+
+    // Performance summary
     const totalCost = rootNode.cost?.total || 0;
     if (totalCost > 50000) {
-      summary += ` This is an expensive query with a total cost of ${totalCost.toFixed(0)}.`;
-    } else if (totalCost > 10000) {
-      summary += ` The query has a moderate cost of ${totalCost.toFixed(0)}.`;
+      parts.push(`\nPerformance note: This is an expensive query with a total cost of ${totalCost.toFixed(0)} units.`);
     }
 
-    // Add row count estimation
-    const totalRows = rootNode.rows || 0;
-    if (totalRows > 0) {
-      summary += ` PostgreSQL estimates it will process approximately ${formatNumber(totalRows)} rows.`;
-    }
-
-    return summary;
+    return parts.join('\n');
   }
 
   private formatDetailedStep(step: ExecutionStep): string {
-    let description = this.capitalizeFirst(step.description);
+    const parts: string[] = [];
     
-    // Build a comprehensive step description
-    const parts: string[] = [description];
+    // Main description
+    parts.push(this.capitalizeFirst(step.description));
     
-    // Add row counts and cost info
+    // Add metrics in brackets
     const metrics: string[] = [];
     if (step.estimatedRows !== undefined) {
-      metrics.push(`Est. rows: ${formatNumber(step.estimatedRows)}`);
+      metrics.push(`rows: ${formatNumber(step.estimatedRows)}`);
     }
-    if (step.actualRows !== undefined) {
-      metrics.push(`Actual: ${formatNumber(step.actualRows)}`);
-    }
-    if (step.cost !== undefined && step.cost > 100) {
-      metrics.push(`Cost: ${step.cost.toFixed(0)}`);
+    if (step.cost !== undefined) {
+      metrics.push(`cost: ${step.cost.toFixed(0)}`);
     }
     
     if (metrics.length > 0) {
-      parts.push(`[${metrics.join(', ')}]`);
+      parts[0] += ` [${metrics.join(', ')}]`;
     }
     
-    // Add performance implications
+    // Add warnings
     if (step.cost && step.cost > 10000) {
-      parts.push("⚠️ High cost operation");
+      parts.push('⚠️ High cost operation');
     }
     
-    if (step.estimatedRows && step.actualRows && 
-        (step.actualRows > step.estimatedRows * 10 || 
-         step.actualRows < step.estimatedRows / 10)) {
-      parts.push("⚠️ Large estimation error");
+    // Add performance notes
+    if (step.performanceNotes.length > 0) {
+      parts.push(...step.performanceNotes.map(note => `• ${note}`));
     }
     
-    return parts.join(' ');
+    return parts.join('\n');
   }
 
   private collectAllWarnings(node: ParsedNode): string[] {
