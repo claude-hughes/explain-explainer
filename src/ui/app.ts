@@ -1,5 +1,5 @@
 import { parsePostgresExplain } from '../parser/postgres-parser';
-import { translatePostgreSQLPlan } from '../translator/translator';
+import { translatePostgreSQLPlanSimple } from '../translator/simple-translator';
 import { DatabaseType, ParseResult, TranslationResult } from '../types';
 
 const POSTGRES_EXAMPLE = `Limit  (cost=79621.20..79621.66 rows=4 width=195)
@@ -108,11 +108,19 @@ class ExplainExplainerApp {
       let translation: TranslationResult;
       
       if (dbType === 'postgresql') {
-        translation = translatePostgreSQLPlan(parseResult.root);
+        translation = translatePostgreSQLPlanSimple(parseResult.root);
       } else {
         // MySQL translator will be implemented later
         translation = { summary: '', steps: [], warnings: [], recommendations: [] };
       }
+
+      // Debug logging
+      console.log('Translation result:', {
+        summaryLength: translation.summary.length,
+        stepsCount: translation.steps.length,
+        warningsCount: translation.warnings.length,
+        recommendationsCount: translation.recommendations.length
+      });
 
       this.displayTranslation(translation, dbType);
       
@@ -137,8 +145,7 @@ class ExplainExplainerApp {
       html += '<div class="steps">';
       html += '<h3>Execution Steps:</h3>';
       translation.steps.forEach((step, index) => {
-        const stepHtml = this.escapeHtml(step).replace(/\n/g, '<br>');
-        html += `<div class="step"><strong>Step ${index + 1}:</strong> ${stepHtml}</div>`;
+        html += `<div class="step"><strong>Step ${index + 1}:</strong> ${this.escapeHtml(step)}</div>`;
       });
       html += '</div>';
     }
