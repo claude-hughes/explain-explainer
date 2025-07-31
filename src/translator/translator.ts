@@ -3,7 +3,8 @@ import {
   getNodeExplanation, 
   detectPerformanceIssues, 
   generateRecommendations,
-  ExecutionStep 
+  ExecutionStep,
+  formatNumber
 } from './explanations';
 
 export class PostgreSQLTranslator {
@@ -11,11 +12,11 @@ export class PostgreSQLTranslator {
     const steps = this.generateExecutionSteps(rootNode);
     const allWarnings = this.collectAllWarnings(rootNode);
     const allRecommendations = this.collectAllRecommendations(rootNode);
-    const summary = this.generateSummary(steps);
+    const summary = this.generateDetailedSummary(rootNode, steps);
 
     return {
       summary,
-      steps: steps.map(step => this.formatStep(step)),
+      steps: steps.map(step => this.formatDetailedStep(step)),
       warnings: allWarnings,
       recommendations: allRecommendations
     };
@@ -26,11 +27,11 @@ export class PostgreSQLTranslator {
     let stepCounter = 1;
 
     const processNode = (currentNode: ParsedNode, depth: number = 0): void => {
+      // Process children first (bottom-up for PostgreSQL)
       currentNode.children.forEach(child => processNode(child, depth + 1));
 
       const explanation = getNodeExplanation(currentNode);
       const performanceIssues = detectPerformanceIssues(currentNode);
-      // const recommendations = generateRecommendations(currentNode);
 
       steps.push({
         stepNumber: stepCounter++,
@@ -48,6 +49,114 @@ export class PostgreSQLTranslator {
 
     processNode(node);
     return steps;
+  }
+
+  private generateDetailedSummary(rootNode: ParsedNode, steps: ExecutionStep[]): string {
+    if (steps.length === 0) return "No execution steps found.";
+
+    // Analyze the query structure
+    const scanSteps = steps.filter(s => s.nodeType.includes('Scan'));
+    const joinSteps = steps.filter(s => s.nodeType.includes('Loop') || s.nodeType.includes('Join'));
+    const sortSteps = steps.filter(s => s.nodeType.includes('Sort'));
+    const limitSteps = steps.filter(s => s.nodeType.includes('Limit'));
+    const gatherSteps = steps.filter(s => s.nodeType.includes('Gather'));
+    
+    let summary = "This query ";
+
+    // Describe the main data access pattern
+    if (scanSteps.length > 0) {
+      const mainScan = scanSteps[0];
+      if (mainScan.nodeType.includes('Parallel')) {
+        summary += `performs a parallel scan`;
+      } else if (mainScan.nodeType.includes('Index')) {
+        summary += `uses index lookups`;
+      } else {
+        summary += `performs table scans`;
+      }
+      
+      // List tables being accessed
+      const tables = [...new Set(scanSteps.map(s => s.tableName).filter(Boolean))];
+      if (tables.length > 0) {
+        summary += ` on ${tables.join(', ')}`;
+      }
+    }
+
+    // Describe joins
+    if (joinSteps.length > 0) {
+      summary += `, performs ${joinSteps.length} join operation${joinSteps.length > 1 ? 's' : ''}`;
+      const nestedLoops = joinSteps.filter(s => s.nodeType.includes('Nested Loop')).length;
+      if (nestedLoops > 0) {
+        summary += ` (using nested loops)`;
+      }
+    }
+
+    // Describe post-processing
+    if (sortSteps.length > 0) {
+      summary += `, sorts the results`;
+    }
+
+    if (limitSteps.length > 0) {
+      summary += `, and returns only ${limitSteps[0].estimatedRows} rows`;
+    }
+
+    summary += ".";
+
+    // Add execution strategy details
+    if (gatherSteps.length > 0) {
+      summary += " The query uses parallel execution to improve performance.";
+    }
+
+    // Add cost analysis
+    const totalCost = rootNode.cost?.total || 0;
+    if (totalCost > 50000) {
+      summary += ` This is an expensive query with a total cost of ${totalCost.toFixed(0)}.`;
+    } else if (totalCost > 10000) {
+      summary += ` The query has a moderate cost of ${totalCost.toFixed(0)}.`;
+    }
+
+    // Add row count estimation
+    const totalRows = rootNode.rows || 0;
+    if (totalRows > 0) {
+      summary += ` PostgreSQL estimates it will process approximately ${formatNumber(totalRows)} rows.`;
+    }
+
+    return summary;
+  }
+
+  private formatDetailedStep(step: ExecutionStep): string {
+    let description = this.capitalizeFirst(step.description);
+    
+    // Build a comprehensive step description
+    const parts: string[] = [description];
+    
+    // Add row counts and cost info
+    const metrics: string[] = [];
+    if (step.estimatedRows !== undefined) {
+      metrics.push(`Est. rows: ${formatNumber(step.estimatedRows)}`);
+    }
+    if (step.actualRows !== undefined) {
+      metrics.push(`Actual: ${formatNumber(step.actualRows)}`);
+    }
+    if (step.cost !== undefined && step.cost > 100) {
+      metrics.push(`Cost: ${step.cost.toFixed(0)}`);
+    }
+    
+    if (metrics.length > 0) {
+      parts.push(`[${metrics.join(', ')}]`);
+    }
+    
+    // Add performance implications
+    if (step.cost && step.cost > 10000) {
+      parts.push("⚠️ High cost operation");
+    }
+    
+    if (step.estimatedRows && step.actualRows && 
+        (step.actualRows > step.estimatedRows * 10 || 
+         step.actualRows < step.estimatedRows / 10)) {
+      parts.push("⚠️ Large estimation error");
+    }
+    
+    return parts.join(' ');
   }
 
   private collectAllWarnings(node: ParsedNode): string[] {
@@ -82,103 +191,9 @@ export class PostgreSQLTranslator {
     return [...new Set(recommendations)].filter(Boolean);
   }
 
-  private generateSummary(steps: ExecutionStep[]): string {
-    if (steps.length === 0) {
-      return "No execution steps found in the query plan.";
-    }
-
-    const scanOperations = steps.filter(step => 
-      step.nodeType.includes('Scan')
-    );
-    const joinOperations = steps.filter(step => 
-      step.nodeType.includes('Join') || step.nodeType.includes('Nested Loop')
-    );
-    const parallelOperations = steps.filter(step => 
-      step.nodeType.includes('Parallel') || step.nodeType.includes('Gather')
-    );
-    const sortOperations = steps.filter(step => step.nodeType === 'Sort');
-    const limitOperations = steps.filter(step => step.nodeType === 'Limit');
-
-    let summary = "The database will execute this query by ";
-
-    if (scanOperations.length > 0) {
-      const firstScan = scanOperations[0];
-      if (firstScan.nodeType.includes('Parallel')) {
-        summary += `first performing a parallel sequential scan on the ${firstScan.tableName} table using ${this.getWorkerCount(steps)} worker process${this.getWorkerCount(steps) > 1 ? 'es' : ''}`;
-      } else if (firstScan.nodeType.includes('Index')) {
-        summary += `first looking up rows in the ${firstScan.tableName} table using the ${firstScan.indexName} index`;
-      } else {
-        summary += `first scanning the ${firstScan.tableName} table`;
-      }
-
-      if (this.hasFilter(firstScan)) {
-        summary += ', filtering for matching rows';
-      }
-      
-      if (scanOperations.length > 1) {
-        const additionalTables = [...new Set(scanOperations.slice(1).map(s => s.tableName).filter(Boolean))];
-        summary += `. For each matching row, it will then look up related data from ${additionalTables.join(', ')}`;
-      }
-    }
-
-    if (joinOperations.length > 0) {
-      summary += `, joining the results together`;
-    }
-
-    if (sortOperations.length > 0) {
-      summary += `, sorting the results`;
-    }
-
-    if (limitOperations.length > 0) {
-      const limitStep = limitOperations[limitOperations.length - 1];
-      summary += `, and finally limiting to ${limitStep.estimatedRows} row${limitStep.estimatedRows === 1 ? '' : 's'}`;
-    }
-
-    if (parallelOperations.length > 0) {
-      summary += `. The parallel execution will be gathered and merged to maintain the sort order`;
-    }
-
-    summary += ".";
-
-    return summary;
-  }
-
-  private getWorkerCount(steps: ExecutionStep[]): number {
-    const parallelSteps = steps.filter(step => step.nodeType.includes('Parallel') || step.nodeType.includes('Gather'));
-    return parallelSteps.length > 0 ? 1 : 1; // Default to 1 for now, could be extracted from plan
-  }
-
-  private hasFilter(step: ExecutionStep): boolean {
-    return step.description.includes('filtering for');
-  }
-
-  private formatStep(step: ExecutionStep): string {
-    let description = `Step ${step.stepNumber}: ${this.capitalizeFirst(step.description)}`;
-    
-    if (step.cost && step.cost > 1000) {
-      description += ` (high cost: ${step.cost.toFixed(2)})`;
-    }
-    
-    if (step.performanceNotes.length > 0) {
-      description += ` - ${step.performanceNotes.join(', ')}`;
-    }
-    
-    if (step.warnings.length > 0) {
-      description += ` ⚠️ ${step.warnings.join(', ')}`;
-    }
-    
-    return description;
-  }
-
   private capitalizeFirst(str: string): string {
     return str.charAt(0).toUpperCase() + str.slice(1);
   }
-
-  // private formatNumber(num: number): string {
-  //   if (num < 1000) return num.toString();
-  //   if (num < 1000000) return `${(num / 1000).toFixed(1)}K`;
-  //   return `${(num / 1000000).toFixed(1)}M`;
-  // }
 }
 
 export function translatePostgreSQLPlan(rootNode: ParsedNode): TranslationResult {

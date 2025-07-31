@@ -137,7 +137,8 @@ class ExplainExplainerApp {
       html += '<div class="steps">';
       html += '<h3>Execution Steps:</h3>';
       translation.steps.forEach((step, index) => {
-        html += `<div class="step"><strong>Step ${index + 1}:</strong> ${this.escapeHtml(step)}</div>`;
+        const stepHtml = this.escapeHtml(step).replace(/\n/g, '<br>');
+        html += `<div class="step"><strong>Step ${index + 1}:</strong> ${stepHtml}</div>`;
       });
       html += '</div>';
     }

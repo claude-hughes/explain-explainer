@@ -252,7 +252,7 @@ function formatGroupKeys(groupKeys: string[]): string {
   return groupKeys.join(', ');
 }
 
-function formatNumber(num?: number): string {
+export function formatNumber(num?: number): string {
   if (num === undefined || num === null) return '0';
   if (num < 1000) return num.toString();
   if (num < 1000000) return `${(num / 1000).toFixed(1)}K`;
